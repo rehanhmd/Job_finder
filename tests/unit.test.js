@@ -7,7 +7,7 @@ const { JSDOM } = require(process.env.JSDOM_PATH || require('path').join(require
 const F = require('./fixtures');
 
 const ROOT = path.join(__dirname, '..', 'assets');
-const SRC = ['core.js', 'ai.js', 'cv.js', 'jobs.js', 'sites.js', 'voice.js', 'fillplan.js', 'mail.js'].map((f) => fs.readFileSync(path.join(ROOT, 'www/js', f), 'utf8').replace(/var BUILTIN_URL = '[^']*'/, "var BUILTIN_URL = 'https://relay.test/v1'"));
+const SRC = ['core.js', 'ai.js', 'cv.js', 'jobs.js', 'sites.js', 'voice.js', 'fillplan.js', 'mail.js', 'alerts.js'].map((f) => fs.readFileSync(path.join(ROOT, 'www/js', f), 'utf8').replace(/var BUILTIN_URL = '[^']*'/, "var BUILTIN_URL = 'https://relay.test/v1'"));
 const AGENT = fs.readFileSync(path.join(ROOT, 'inject/autofill.js'), 'utf8');
 
 function appWindow() {
@@ -739,4 +739,78 @@ test('sites: a JavaScript-only careers page finds the company board by name, and
   RH.http = async (o) => o.url === 'https://jsonly.dev/jobs' ? { status: 200, body: '<title>Jobs</title><div id="app"></div>', url: o.url } : { status: 404, body: '' };
   const p = JSON.parse(JSON.stringify(await RH.sites._resolve('https://jsonly.dev/jobs')));
   assert.equal(p.kind, 'page'); assert.equal(p.n, 0);
+});
+
+// ---------------------------------------------------------------- new-job alerts (notification + email) and the background check
+const BG = fs.readFileSync(path.join(ROOT, 'www/js/bg.js'), 'utf8');
+function alertWindow(native) {
+  const dom = new JSDOM('<!doctype html><body></body>', { runScripts: 'outside-only', url: 'https://appassets.androidplatform.net/www/bg.html' });
+  dom.window.Android = native;
+  SRC.forEach((s) => dom.window.eval(s));
+  return dom.window;
+}
+function fakePhone(boards) {
+  const kv = {}, results = {}, calls = { notify: [], mail: [], done: null };
+  let w = null;
+  const native = {
+    kvGet: (k) => (k in kv ? kv[k] : null), kvSet: (k, v) => { kv[k] = v; }, kvRemove: (k) => { delete kv[k]; },
+    http: (id, req) => { const r = JSON.parse(req); const b = boards[r.url]; results[id] = JSON.stringify(b ? { status: 200, body: JSON.stringify(b()) } : { status: 404, body: '' }); setTimeout(() => w.__httpDone(id), 0); },
+    httpTake: (id) => results[id],
+    sendMail: (id, cfg) => { calls.mail.push(JSON.parse(cfg)); results[id] = '{"status":200}'; setTimeout(() => w.__httpDone(id), 0); },
+    notify: (id, title, text) => calls.notify.push({ id, title, text }), notificationsAllowed: () => true, scheduleSiteChecks: (on) => { calls.scheduled = on; },
+    done: (s) => { calls.done = JSON.parse(s); }, platform: () => 'android-bg'
+  };
+  return { kv, calls, native, attach: (win) => { w = win; return win; } };
+}
+
+test('alerts: notification and email text', () => {
+  const w = appWindow(), A = w.RH.alerts;
+  const items = [{ site: 'Scale AI', title: 'AI Trainer – Physics', location: 'Remote', applyUrl: 'https://g/1' }, { site: 'Scale AI', title: 'LLM Evaluator', applyUrl: 'https://g/2' }, { site: 'Mercor', title: 'Math Expert', applyUrl: 'https://a/3' }];
+  const s = A.summary(items, '');
+  assert.equal(s.title, '📌 3 new jobs on your sites'); assert.match(s.text, /AI Trainer – Physics — Scale AI\nLLM Evaluator — Scale AI\nMath Expert — Mercor/);
+  const e = A.email(items, 'Rahul');
+  assert.equal(e.subject, '3 new jobs: AI Trainer – Physics at Scale AI and more');
+  assert.match(e.body, /\(Rahul\)/); assert.match(e.body, /Scale AI\n  • AI Trainer – Physics \(Remote\)\n    https:\/\/g\/1/); assert.match(e.body, /Mercor\n  • Math Expert\n    https:\/\/a\/3/);
+  assert.equal(A.summary(items.slice(0, 1), '').title, '📌 1 new job on your sites');
+  assert.equal(A.smtpHost({ provider: 'gmail' }), 'smtp.gmail.com'); assert.equal(A.smtpHost({ provider: 'other', host: 'imap.example.com' }), 'smtp.example.com');
+});
+
+test('alerts: background check visits every account, notifies and emails only what is new', async () => {
+  let gh = [{ id: 1, title: 'AI Trainer', location: { name: 'Remote' }, absolute_url: 'https://g/1', company_name: 'Acme AI' }];
+  let lv = [{ id: 'L1', text: 'Data Labeler', workplaceType: 'remote', categories: { location: 'Anywhere' }, hostedUrl: 'https://jobs.lever.co/beta/L1' }];
+  const phone = fakePhone({ 'https://boards-api.greenhouse.io/v1/boards/acmeai/jobs': () => ({ jobs: gh }), 'https://api.lever.co/v0/postings/beta?mode=json': () => lv }); // each API's real shape
+  // the app: "Me" follows Acme (notifications + email), "Rahul" follows Beta (notifications only)
+  const app = phone.attach(alertWindow(phone.native)), RH = app.RH;
+  RH.http = (o) => new Promise((res) => { const id = 'x' + Math.random(); phone.native.http(id, JSON.stringify(o)); const t = setInterval(() => { const r = phone.native.httpTake(id); if (r) { clearInterval(t); res(JSON.parse(r)); } }, 1); });
+  RH.mail.saveCfg({ provider: 'gmail', host: 'imap.gmail.com', user: 'me@gmail.com', pass: 'app-pass' });
+  RH.alerts.save({ notify: true, email: true });
+  await RH.sites.add('https://boards.greenhouse.io/acmeai');
+  const rahul = RH.account.add('Rahul'); RH.account.use(rahul);
+  await RH.sites.add('https://jobs.lever.co/beta');
+  RH.account.use('main');
+  assert.equal(RH.alerts.sync(), true); assert.equal(phone.calls.scheduled, true, 'background check scheduled');
+  // nothing new yet: the background run sends nothing
+  const ago = (k) => { const l = JSON.parse(phone.kv[k]); l.forEach((s) => { s.lastCheck -= 31 * 60000; }); phone.kv[k] = JSON.stringify(l); };
+  ago('sites'); ago('acct.' + rahul + '.sites');
+  const runBg = async () => { phone.calls.done = null; const bg = phone.attach(alertWindow(phone.native)); bg.eval(BG); for (let i = 0; i < 200 && !phone.calls.done; i++) await new Promise((r) => setTimeout(r, 5)); return phone.calls.done; };
+  let rep = await runBg();
+  assert.equal(rep.accounts, 2); assert.equal(rep.checked, 2); assert.equal(rep.fresh, 0); assert.equal(phone.calls.notify.length, 0); assert.equal(phone.calls.mail.length, 0);
+  // new jobs on both boards (and an on-site one that "remote only" hides)
+  gh = gh.concat([{ id: 2, title: 'LLM Evaluator', location: { name: 'Remote, Worldwide' }, absolute_url: 'https://g/2' }, { id: 3, title: 'Receptionist', location: { name: 'Paris' }, absolute_url: 'https://g/3' }]);
+  lv = lv.concat([{ id: 'L2', text: 'Prompt Writer', workplaceType: 'remote', categories: { location: 'Remote' }, hostedUrl: 'https://jobs.lever.co/beta/L2' }]);
+  ago('sites'); ago('acct.' + rahul + '.sites');
+  rep = await runBg();
+  assert.equal(rep.fresh, 2); assert.equal(rep.notified, 2); assert.equal(rep.emailed, 1);
+  assert.deepEqual(phone.calls.notify.map((n) => n.title), ['📌 1 new job on your sites (Me)', '📌 1 new job on your sites (Rahul)']);
+  assert.match(phone.calls.notify[0].text, /LLM Evaluator — Acme AI/); assert.ok(!/Receptionist/.test(phone.calls.notify[0].text), 'on-site job not announced');
+  assert.equal(phone.calls.mail.length, 1, 'only "Me" has email alerts');
+  const m = phone.calls.mail[0];
+  assert.equal(m.host, 'smtp.gmail.com'); assert.equal(m.user, 'me@gmail.com'); assert.equal(m.to, 'me@gmail.com'); assert.equal(m.pass, 'app-pass');
+  assert.match(m.subject, /1 new job: LLM Evaluator at Acme AI/); assert.match(m.body, /https:\/\/job-boards\.greenhouse\.io\/embed\/job_app\?for=acmeai&token=2/);
+  // the same jobs are never announced twice; sites checked less than 20 minutes ago are skipped
+  rep = await runBg();
+  assert.equal(rep.checked, 0); assert.equal(phone.calls.notify.length, 2);
+  // turning alerts off everywhere stops the background check
+  RH.alerts.save({ notify: false, email: false }); RH.account.use(rahul); RH.alerts.save({ notify: false, email: false }); RH.account.use('main');
+  assert.equal(RH.alerts.sync(), false); assert.equal(phone.calls.scheduled, false);
 });

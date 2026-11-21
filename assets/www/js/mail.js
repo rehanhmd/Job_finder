@@ -4,8 +4,8 @@
   var RH = g.RH, U = RH.util;
 
   var PROVIDERS = {
-    gmail: { name: 'Gmail', host: 'imap.gmail.com', help: 'https://myaccount.google.com/apppasswords' },
-    yahoo: { name: 'Yahoo Mail', host: 'imap.mail.yahoo.com', help: 'https://login.yahoo.com/account/security' },
+    gmail: { name: 'Gmail', host: 'imap.gmail.com', smtp: 'smtp.gmail.com', help: 'https://myaccount.google.com/apppasswords' },
+    yahoo: { name: 'Yahoo Mail', host: 'imap.mail.yahoo.com', smtp: 'smtp.mail.yahoo.com', help: 'https://login.yahoo.com/account/security' },
     other: { name: 'Other (IMAP server)', host: '', help: '' }
   };
 

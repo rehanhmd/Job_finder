@@ -46,6 +46,16 @@
     });
   };
 
+  /** Send one email from the phone (alerts). cfg: {host, port, user, pass, to, subject, body}. Resolves {status, error}. */
+  RH.mailSend = function (cfg) {
+    if (!native || !native.sendMail) return Promise.resolve({ status: 0, error: 'Sending email works in the Android app only' });
+    return new Promise(function (resolve) {
+      var id = 's' + (++seq) + '_' + Date.now();
+      pending[id] = resolve;
+      native.sendMail(id, JSON.stringify(cfg));
+    });
+  };
+
   RH.httpJson = function (opts) {
     return RH.http(opts).then(function (r) {
       if (r.status < 200 || r.status >= 300) {
@@ -81,7 +91,7 @@
   // Each account keeps its own CVs, profile, answers, tracker, email settings… under the key prefix "acct.<id>.".
   // The first account ("main") uses plain keys, so data from before accounts existed simply becomes that account.
   // Shared by all accounts: the server sign-in, AI provider keys, job-board caches and the native "cv.meta" handle.
-  var PER_ACCOUNT = /^(profile$|answers$|memory$|tracker$|cvs$|accounts$|sites$|rank\.cache$|mail\.cfg$|jobs\.(queries|last|prefs|cvMode)$|cv\.(activeId$|meta\.web$|text|b64)|cover\.)/;
+  var PER_ACCOUNT = /^(profile$|answers$|memory$|tracker$|cvs$|accounts$|sites$|alerts$|rank\.cache$|mail\.cfg$|jobs\.(queries|last|prefs|cvMode)$|cv\.(activeId$|meta\.web$|text|b64)|cover\.)/;
   var acctId = parse(rawGet('acct.current'), 'main') || 'main';
   function keyOf(k) { return acctId !== 'main' && PER_ACCOUNT.test(k) ? 'acct.' + acctId + '.' + k : k; }
 
@@ -112,6 +122,8 @@
       name = String(name || '').trim().slice(0, 40); if (!name) return;
       var l = accountList(); l.forEach(function (a) { if (a.id === id) a.name = name; }); saveAccounts(l);
     },
+    /** Read/write another account's data without making it current (the background checker visits every account). */
+    use: function (id) { var prev = acctId; acctId = id || 'main'; return prev; },
     /** Make another account current. The caller reloads the app so every screen starts from that account's data. */
     switchTo: function (id) {
       if (!accountList().some(function (a) { return a.id === id; })) return false;
@@ -129,7 +141,7 @@
         rawRemove(pre + 'cv.text.' + c.id); rawRemove(pre + 'cv.b64.' + c.id);
         if (native && native.deleteCvSlot) native.deleteCvSlot(c.id);
       });
-      ['profile', 'answers', 'memory', 'tracker', 'cvs', 'accounts', 'sites', 'rank.cache', 'mail.cfg', 'jobs.queries', 'jobs.last', 'jobs.prefs', 'jobs.cvMode',
+      ['profile', 'answers', 'memory', 'tracker', 'cvs', 'accounts', 'sites', 'alerts', 'rank.cache', 'mail.cfg', 'jobs.queries', 'jobs.last', 'jobs.prefs', 'jobs.cvMode',
         'cv.activeId', 'cv.meta.web', 'cv.text', 'cv.b64'].forEach(function (k) { rawRemove(pre + k); });
       saveAccounts(accountList().filter(function (a) { return a.id !== id; }));
       if (acctId === id) RH.account.switchTo('main');

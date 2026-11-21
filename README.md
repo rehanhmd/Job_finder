@@ -14,6 +14,12 @@ It runs on my own free Cloudflare server. Nobody else's server, keys or access c
   - Any other page: its job links are listed.
 
   Sites are checked when the app opens, at most every 30 minutes, and when you tap ↻ Check. Jobs that appear later are marked **NEW**, and the Jobs tab shows how many. Company boards show remote jobs by default; untick "Only remote jobs" on a site to see all of them. Each account has its own sites.
+- **New-job alerts** (Settings → 🔔 New-job alerts). About every 30 minutes, **also when the app is closed** (and after a restart), the phone checks your followed sites:
+  - **Phone notification** "📌 2 new jobs on your sites". Tap it to open the Jobs tab.
+  - **Email** (optional): each new job with its link, sent from your own mail account to yourself. It uses the same app password as Email tracking, over a verified TLS connection; no other service is involved.
+  - Each job is announced once. On-site jobs are left out while a site's "remote only" is on.
+
+  Phones that save battery aggressively (OnePlus, Xiaomi, Samsung…) may pause background apps. If alerts don't arrive, allow RemoteHunt to run in the background; the alerts card links to that setting.
 - **Faster, more reliable AI.** If Gemini's main model hasn't answered within 15 seconds, its light model starts alongside it and the first answer wins. When a stronger provider fails, the reply says why, in `skipped`.
 - **Search without AI.** If AI can't read a CV, the basic parser still finds the job title near the top. Search then falls back to job titles and skills instead of stopping.
 - **No over-the-air code updates.** The original downloaded unsigned code changes from the server into the app. To update this version, rebuild and reinstall it.
@@ -78,7 +84,9 @@ The app ID is `com.personal.remotehunt`, so it installs alongside the original R
 cd server && node test.mjs && node crawl.test.mjs && cd ..   # server
 node --test tests/unit.test.js                                # app logic (jsdom)
 node tests/e2e/run.js                                         # whole app in headless Chrome
-javac -d /tmp/it src/com/remotehunt/app/ImapClient.java tests/java/ImapTlsTest.java && java -cp /tmp/it ImapTlsTest   # needs internet
+javac -d /tmp/jt src/com/remotehunt/app/Tls.java src/com/remotehunt/app/ImapClient.java src/com/remotehunt/app/SmtpClient.java tests/java/*.java && java -cp /tmp/jt ImapTlsTest && java -cp /tmp/jt SmtpTest   # needs internet
 ```
+
+`DEBUG=1 ./build.sh` builds `build/RemoteHunt-debug.apk`, which turns on Chrome remote debugging. Use it for testing on an emulator only.
 
 Run `javac` and `java` from `~/.local/jdk17/Contents/Home/bin` if they aren't on your PATH.

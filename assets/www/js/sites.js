@@ -62,7 +62,7 @@
   /** A board's API answer → {name, jobs} in the compact feed format (all jobs; r = remote or not). */
   function parseBoard(ats, slug, data) {
     var out = [], name = '';
-    var add = function (j) { if (j.i && j.t) out.push(j); };
+    var add = function (j) { j.t = String(j.t || '').replace(/\s+/g, ' ').trim(); if (j.i && j.t) out.push(j); };
     if (ats === 'greenhouse') {
       (data.jobs || []).forEach(function (j) {
         var loc = (j.location && j.location.name) || ''; name = name || j.company_name || '';
@@ -260,6 +260,7 @@
         else if (site.pageName && site.pageName.length > 2 && U.norm(site.pageName) !== U.norm(site.slug)) site.name = site.pageName;
       }
       site.lastCheck = site.lastOk = now; site.lastError = '';
+      site._fresh = newly; // not stored: read by checkAll for alerts
       return newly.length;
     }, function (e) {
       site.lastCheck = now; site.lastError = String(e && e.message || e).slice(0, 160);
@@ -307,17 +308,28 @@
     return shown(s).filter(function (j) { return ids[j.i]; }).length;
   }
 
-  /** Check every site that is due (or all, when forced). Resolves to {checked, fresh}. */
+  /**
+   * Check every site that is due (or all, when forced). Resolves to {checked, fresh, items}: `items` are the jobs
+   * that are new in this run and shown under the site's "remote only" setting (what alerts tell you about).
+   * maxAgeMs: how old a check may be before the site is due again (default 30 minutes).
+   */
   var running = null;
-  function checkAll(force) {
+  function checkAll(force, maxAgeMs) {
     if (running) return running;
-    var now = Date.now(), l = list(), due = l.filter(function (s) { return force || !s.lastCheck || now - s.lastCheck > CHECK_EVERY; });
-    if (!due.length) return Promise.resolve({ checked: 0, fresh: 0 });
+    var age = maxAgeMs || CHECK_EVERY;
+    var now = Date.now(), l = list(), due = l.filter(function (s) { return force || !s.lastCheck || now - s.lastCheck > age; });
+    if (!due.length) return Promise.resolve({ checked: 0, fresh: 0, items: [] });
     running = U.pool(due, 3, check).then(function (counts) {
+      var items = [];
+      due.forEach(function (s) {
+        var fresh = {}; (s._fresh || []).forEach(function (id) { fresh[id] = 1; });
+        shown(s).forEach(function (j) { if (fresh[j.i]) items.push({ siteId: s.id, site: s.name, title: j.t, location: j.l || '', url: j.u || j.a, applyUrl: j.a || j.u }); });
+        delete s._fresh;
+      });
       var cur = list(); // keep edits made meanwhile (e.g. a site removed); store the checked copies
       due.forEach(function (s) { for (var i = 0; i < cur.length; i++) if (cur[i].id === s.id) cur[i] = s; });
       save(cur);
-      return { checked: due.length, fresh: counts.reduce(function (n, c) { return n + (typeof c === 'number' ? c : 0); }, 0) };
+      return { checked: due.length, fresh: counts.reduce(function (n, c) { return n + (typeof c === 'number' ? c : 0); }, 0), items: items };
     }).then(function (r) { running = null; return r; }, function (e) { running = null; throw e; });
     return running;
   }

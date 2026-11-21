@@ -150,6 +150,8 @@ async function fakeInternet(reqJson) {
       pickCvSlot: (slot) => { window.__nodePickCv(slot).then((x) => { files[x.meta.path] = x.b64; kv['cv.meta'] = JSON.stringify(x.meta); window.RH.onCvPicked(x.meta); }); },
       cvBase64: () => null, cvMeta: () => kv['cv.meta'] || null, cvBase64Path: (p) => files[p] || null, deleteCvSlot: () => {},
       mailCheck: (id, cfg) => { window.__nodeMail(cfg).then((r) => { results[id] = JSON.stringify(r); window.__httpDone(id); }); },
+      sendMail: (id, cfg) => { (window.__sent = window.__sent || []).push(JSON.parse(cfg)); results[id] = '{"status":200}'; setTimeout(() => window.__httpDone(id), 20); },
+      scheduleSiteChecks: (on) => { window.__scheduled = on; }, notificationsAllowed: () => true, requestNotifications: () => { window.__askedNotify = true; }, launchTab: () => null, openBatterySettings: () => {},
       deviceId: () => 'a-0123456789abcdef', deviceModel: () => 'Google Pixel 8',
       openApply: (u) => { window.__nodeOpenApply(u); }, closeApply: () => {}, loadInApply: (u) => { window.__nodeLoadInApply(u); },
       applyFills: (j, nf) => { window.__nodeFill(j, nf); }, setApplyStatus: (t) => { window.__nodeStatus(t); },
@@ -441,6 +443,31 @@ async function fakeInternet(reqJson) {
     await waitText('Next steps — GitLab interview');
     check(true, 'tracker shows the email subject');
     await new Promise((r) => setTimeout(r, 300)); await shot('13-tracker-email');
+
+    // ---- new-job alerts: follow a site, background check scheduled, email alerts with a test email
+    await click('#tabs [data-tab=jobs]');
+    await app.type('#siteUrl', 'boards.greenhouse.io/testco');
+    await click('[data-act=siteAdd]');
+    await waitText('Following Test Co');
+    check(await app.evaluate(() => window.__scheduled === true), 'following a site starts the 30-minute background check');
+    check(await app.evaluate(() => /Checked about every 30 min, also when the app is closed/.test(document.body.innerText)), 'My sites says alerts are on');
+    await click('#tabs [data-tab=settings]');
+    await waitText('New-job alerts');
+    await app.$eval('[data-alert=email]', (e) => e.click()); // styled switch: the checkbox itself is hidden
+    await waitText('Send test email');
+    await click('[data-act=alertTest]');
+    await app.waitForFunction(() => (window.__sent || []).length === 1, { timeout: 5000 });
+    const sent = await app.evaluate(() => Object.assign({ connected: RH.mail.cfg().user, pass0: RH.mail.cfg().pass }, window.__sent[0]));
+    check(sent.host === 'smtp.gmail.com' && sent.user === sent.connected && sent.to === sent.connected && sent.pass === sent.pass0 && /test/i.test(sent.subject), 'test email sent from the connected Gmail to itself (' + sent.host + ', ' + sent.to + ')');
+    await new Promise((r) => setTimeout(r, 300)); await shot('24-alert-settings');
+    siteJobs.push({ id: 504, title: 'Prompt Engineer', location: { name: 'Remote' }, absolute_url: 'https://job-boards.greenhouse.io/testco/jobs/504' });
+    await click('#tabs [data-tab=jobs]');
+    await click('[data-act=sitesCheck]');
+    await app.waitForFunction(() => (window.__sent || []).length === 2, { timeout: 8000 });
+    const alertMail = await app.evaluate(() => window.__sent[1]);
+    check(/1 new job: Prompt Engineer at Test Co/.test(alertMail.subject) && /jobs\/504|token=504/.test(alertMail.body), 'new job on a followed site -> alert email with its link');
+    await click('.site-row'); await click('[data-act=siteRemove]');
+    check(await app.evaluate(() => window.__scheduled === false), 'no sites left -> background check stopped');
 
     // ---- second CV + "All my CVs" search
     await click('#tabs [data-tab=profile]');

@@ -12,10 +12,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLParameters;
-import javax.net.ssl.SSLSocket;
-import javax.net.ssl.SSLSocketFactory;
 
 /**
  * Minimal read-only IMAP client (no external libraries): logs in with an app password,
@@ -32,35 +28,13 @@ public class ImapClient {
     private OutputStream out;
     private int tag = 0;
 
-    static boolean onAndroid() {
-        return System.getProperty("java.vm.name", "").toLowerCase(Locale.US).contains("dalvik");
-    }
-
     public void connect(String host, int port, boolean ssl, int timeoutMs) throws Exception {
-        Socket plain = new Socket();
-        plain.connect(new InetSocketAddress(host, port), timeoutMs);
-        plain.setSoTimeout(timeoutMs);
         if (ssl) {
-            // Layering TLS over the connected socket with the host name sends SNI. A raw SSLSocket does NOT check
-            // that the certificate belongs to `host`, so that is enforced here: otherwise anyone on the network
-            // with any valid certificate could read the app password.
-            SSLSocket s = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault()).createSocket(plain, host, port, true);
-            boolean checkedByTls = false;
-            try {
-                SSLParameters p = s.getSSLParameters();
-                // Android 7+ and desktop Java (called by reflection: the app compiles against Android 6)
-                SSLParameters.class.getMethod("setEndpointIdentificationAlgorithm", String.class).invoke(p, "HTTPS");
-                s.setSSLParameters(p);
-                checkedByTls = true;
-            } catch (Throwable t) { /* older Android: verified below */ }
-            s.startHandshake();
-            if ((onAndroid() || !checkedByTls) && !HttpsURLConnection.getDefaultHostnameVerifier().verify(host, s.getSession())) {
-                try { s.close(); } catch (Exception ignored) { }
-                throw new Exception("The mail server's certificate is not valid for " + host + ". Connection stopped to protect your password.");
-            }
-            socket = s;
+            socket = Tls.connect(host, port, timeoutMs); // certificate must belong to `host` (see Tls)
         } else {
-            socket = plain;
+            socket = new Socket();
+            socket.connect(new InetSocketAddress(host, port), timeoutMs);
+            socket.setSoTimeout(timeoutMs);
         }
         in = new BufferedInputStream(socket.getInputStream());
         out = socket.getOutputStream();

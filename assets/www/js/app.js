@@ -128,6 +128,7 @@
   }
 
   function go(tab) { S.tab = tab; closeSheet(); render(); window.scrollTo(0, 0); }
+  RH.go = go; // a new-job notification opens the Jobs tab
 
   // ------------------------------------------------------------------ ACCOUNTS (several people / job searches on one phone)
   function initials(n) { return String(n || '?').trim().split(/\s+/).slice(0, 2).map(function (w) { return w.charAt(0); }).join('').toUpperCase() || '?'; }
@@ -529,6 +530,11 @@
     var h = '<div class="card"><div class="row"><h3 class="grow" style="margin:0">📌 My sites' + (sites.length ? ' <span class="muted small">(' + sites.length + ')</span>' : '') + '</h3>' +
       (total ? '<span class="pill g">' + total + ' new</span>' : '') +
       (sites.length ? '<button class="btn sm" data-act="sitesCheck"' + (S.sitesBusy ? ' disabled' : '') + '>' + (S.sitesBusy ? '<span class="spin"></span> Checking' : '↻ Check') + '</button>' : '') + '</div>';
+    if (sites.length) {
+      var ac = RH.alerts.cfg();
+      h += '<div class="muted tiny" style="margin-top:6px">' + (ac.notify || ac.email ? '🔔 Checked about every 30 min, also when the app is closed' + (ac.email ? ' • email on' : '') : '🔕 Alerts are off') +
+        ' • <a href="#" data-act="go" data-tab="settings">alert settings</a></div>';
+    }
     if (!sites.length) h += '<p class="muted small" style="margin:8px 0 0">Follow job pages you like: a company\'s hiring page (Greenhouse, Lever, Ashby, Workable…) or any careers page. New jobs show up here, marked NEW.</p>';
     sites.forEach(function (st) {
       var n = RH.sites.newCount(st), cnt = RH.sites.count(st), all = RH.sites.total(st);
@@ -567,6 +573,7 @@
     if (force) { S.sitesBusy = true; if (S.tab === 'jobs' && $('#sheet').hidden) render(); }
     RH.sites.checkAll(force).then(function (r) {
       S.sitesBusy = false; renderBadge();
+      if (r.items && r.items.length) RH.alerts.deliver(r.items, { background: false });
       if (r.fresh) toast('📌 ' + r.fresh + ' new job' + (r.fresh > 1 ? 's' : '') + ' on your sites');
       else if (force) toast('No new jobs on your sites');
       if (S.tab === 'jobs' && $('#sheet').hidden) render();
@@ -924,6 +931,10 @@
     });
   }
 
+  RH.onNotifyPermission = function (granted) {
+    if (!granted) toast('Notifications are off. Turn them on in Settings → New-job alerts, or get alerts by email.');
+    if (S.tab === 'settings') render();
+  };
   RH.onResume = function () {
     sitesAuto(false);
     var c = RH.mail.cfg();
@@ -964,8 +975,24 @@
     h += '<div class="setrow"><div class="grow">Hide hybrid / on-site jobs</div><label class="switch"><input type="checkbox" data-pref="hideNotRemote"' + (pf.hideNotRemote ? ' checked' : '') + '><i></i></label></div>';
     h += '<div class="setrow"><div class="grow">Jobs ranked by AI per search<div class="muted tiny">More = better ranking, uses more free quota</div></div><select data-pref="aiRankCount" style="width:90px">' + [16, 24, 40, 64].map(function (n) { return '<option' + (pf.aiRankCount == n ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select></div></div>';
 
+    var ac = RH.alerts.cfg(), mcA = RH.mail.cfg(), nSites = RH.sites.list().length, bgLast = RH.store.get('alerts.bgLast', null);
+    var notifyOk = RH.nativeCall('notificationsAllowed') !== false;
+    h += '<div class="card"><h2>🔔 New-job alerts</h2><p class="muted small">RemoteHunt checks the websites you follow (Jobs → 📌 My sites) about every 30 minutes, <b>also when the app is closed</b>, and tells you when new jobs appear.</p>' +
+      '<div class="setrow"><div class="grow">Phone notification<div class="muted tiny">"📌 2 new jobs on your sites" — tap it to open the Jobs tab</div></div><label class="switch"><input type="checkbox" data-alert="notify"' + (ac.notify ? ' checked' : '') + '><i></i></label></div>' +
+      (ac.notify && !notifyOk ? '<div class="note err" style="margin:6px 0">Notifications are blocked for RemoteHunt. <button class="btn sm" data-act="allowNotify">Allow notifications</button></div>' : '') +
+      '<div class="setrow"><div class="grow">Email me new jobs<div class="muted tiny">Each new job with its link, sent from your own email account to you</div></div><label class="switch"><input type="checkbox" data-alert="email"' + (ac.email ? ' checked' : '') + '><i></i></label></div>';
+    if (ac.email) {
+      h += mcA ? '<label class="f" style="margin-top:6px"><span>Send alerts to (sent from ' + esc(mcA.user) + ')</span><input type="email" data-alert-to="1" placeholder="' + esc(mcA.user) + '" value="' + esc(ac.to || '') + '"></label>' +
+          '<div class="row wrap" style="margin-top:8px"><button class="btn sm" data-act="alertTest"' + (S.alertBusy ? ' disabled' : '') + '>' + (S.alertBusy ? '<span class="spin"></span> Sending…' : '✉️ Send test email') + '</button>' +
+          (ac.lastEmail ? '<span class="muted tiny">Last alert email ' + U.ago(ac.lastEmail) + '</span>' : '') + '</div>' +
+          (ac.lastEmailError ? '<div class="note err" style="margin-top:6px">' + esc(ac.lastEmailError) + '</div>' : '')
+        : '<div class="note err" style="margin-top:6px">Connect your email in <b>Email tracking</b> below first (Gmail + app password). Alerts are sent from that account to yourself.</div>';
+    }
+    h += '<div class="muted tiny" style="margin-top:10px">' + (nSites ? 'Following ' + nSites + ' site' + (nSites > 1 ? 's' : '') + (bgLast && bgLast.at ? ' • last background check ' + U.ago(bgLast.at) + (bgLast.fresh ? ' (' + bgLast.fresh + ' new)' : '') : '') : 'Follow a site first: Jobs → 📌 My sites.') +
+      '</div><div class="muted tiny" style="margin-top:6px">Some phones (OnePlus, Xiaomi, Samsung…) pause background apps to save battery. If alerts don\'t arrive, let RemoteHunt run in the background: <a href="#" data-act="batterySettings">battery settings</a>.</div></div>';
+
     var mc = RH.mail.cfg(), mp = (mc && mc.provider) || S.mailProv || 'gmail', MP = RH.mail.PROVIDERS;
-    h += '<div class="card"><h2>📧 Email tracking</h2><p class="muted small">Connect your inbox so replies from companies (assessments, interview invites, rejections, offers) update your Tracker automatically. Emails are read <b>on this phone only</b>, never sent to any server, and the app only reads, never sends or deletes.</p>';
+    h += '<div class="card"><h2>📧 Email tracking</h2><p class="muted small">Connect your inbox so replies from companies (assessments, interview invites, rejections, offers) update your Tracker automatically. Emails are read <b>on this phone only</b> and never sent to any server. The app never changes or deletes mail; it only sends email to you, for new-job alerts you turn on.</p>';
     if (mc) {
       h += '<div class="kv"><b>Account</b><span>' + esc(mc.user) + '</span><b>Last check</b><span>' + (mc.lastCheck ? U.ago(mc.lastCheck) + (mc.lastCount != null ? ' (' + mc.lastCount + ' emails)' : '') : 'never') + '</span></div>' +
         (mc.lastError ? '<div class="sp"></div><div class="note err">' + esc(mc.lastError) + '</div>' : '') +
@@ -1091,10 +1118,18 @@
         S.siteMsg = '✓ Following ' + st.name + ': ' + (st.remoteOnly && all > n ? n + ' remote job' + (n === 1 ? '' : 's') + ' (' + all + ' in total)' : n + ' job' + (n === 1 ? '' : 's')) + ' there now. New ones will be marked NEW.' +
           (st.kind === 'page' && !st.jobs.length ? ' No job links were found: this page builds its job list with JavaScript, so new jobs can\'t be detected. Try the company\'s Greenhouse, Lever or Ashby link instead.' : '');
         S.siteMsgErr = false; S.siteDraft = '';
+        if (RH.alerts.cfg().notify && RH.nativeCall('notificationsAllowed') === false) RH.nativeCall('requestNotifications');
+        RH.alerts.sync();
       }, function (e) { S.siteMsg = String(e && e.message || e); S.siteMsgErr = true; }).then(function () { S.siteAdding = false; render(); });
     },
     sitesCheck: function () { sitesAuto(true); },
-    siteRemove: function (el) { RH.sites.remove(el.getAttribute('data-id')); S.returnSite = null; closeSheet(); render(); renderBadge(); toast('Stopped following'); },
+    siteRemove: function (el) { RH.sites.remove(el.getAttribute('data-id')); RH.alerts.sync(); S.returnSite = null; closeSheet(); render(); renderBadge(); toast('Stopped following'); },
+    alertTest: function () {
+      S.alertBusy = true; render();
+      RH.alerts.sendTest().then(function (r) { S.alertBusy = false; toast(r.status === 200 ? '✓ Test email sent — check your inbox' : 'Could not send: ' + (r.error || 'unknown error')); render(); });
+    },
+    allowNotify: function () { RH.nativeCall('requestNotifications'); },
+    batterySettings: function () { RH.nativeCall('openBatterySettings'); },
     closeModal: closeModal,
     ext: function (el) { var u = el.getAttribute('data-url'); if (RH.isNative) RH.nativeCall('openExternal', u); else window.open(u, '_blank'); },
     apply: startApply,
@@ -1195,6 +1230,12 @@
       if (k === 'sort' && S.search.result) { RH.jobs.sortJobs(S.search.result, pf.sort); render(); }
       return;
     }
+    if (el.hasAttribute('data-alert')) {
+      var ac = RH.alerts.cfg(); ac[el.getAttribute('data-alert')] = el.checked; RH.alerts.save(ac);
+      if (el.getAttribute('data-alert') === 'notify' && el.checked && RH.nativeCall('notificationsAllowed') === false) RH.nativeCall('requestNotifications');
+      RH.alerts.sync(); render(); return;
+    }
+    if (el.hasAttribute('data-alert-to')) { var at = RH.alerts.cfg(); at.to = el.value.trim(); RH.alerts.save(at); return; }
     if (el.hasAttribute('data-site-remote')) { var sid = el.getAttribute('data-site-remote'); RH.sites.setRemoteOnly(sid, el.checked); openSite(sid); renderBadge(); return; }
     if (el.hasAttribute('data-mailprov')) { S.mailProv = el.value; S.mailErr = ''; render(); return; }
     if (el.hasAttribute('data-cvlabel')) { var lc = cvById(el.getAttribute('data-cvlabel')); if (lc) { lc.label = el.value.trim(); saveCvs(); } return; }
@@ -1218,8 +1259,9 @@
   // ------------------------------------------------------------------ boot
   loadCvMeta();
   RH.store.set('autofill.auto', !!RH.jobs.prefs().autoFill);
-  S.tab = S.profile ? 'jobs' : 'profile';
+  S.tab = S.profile || RH.nativeCall('launchTab') === 'jobs' ? 'jobs' : 'profile';
   render();
   checkAccess();
+  RH.alerts.sync();
   sitesAuto(false);
 })(window);

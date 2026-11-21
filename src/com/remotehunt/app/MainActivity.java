@@ -66,6 +66,7 @@ public class MainActivity extends Activity {
     static final String APP_URL = "https://" + APP_HOST + "/www/index.html";
     static final int REQ_PICK_CV = 41;
     static final int REQ_PICK_UPLOAD = 42;
+    static final int REQ_NOTIFY = 43;
 
     WebView appWeb;
     WebView jobWeb;
@@ -110,12 +111,34 @@ public class MainActivity extends Activity {
         root.addView(applyPanel, new FrameLayout.LayoutParams(-1, -1));
 
         setContentView(root);
+        if (getIntent() != null) launchTab = getIntent().getStringExtra(Alerts.EXTRA_OPEN);
         appWeb.loadUrl(APP_URL);
+    }
+
+    /** True while the app is on screen: the background site check then leaves the work to the open app. */
+    static volatile boolean foreground;
+    String launchTab;
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        // Android may re-create the app (e.g. after it was killed in the background) and deliver this before the page
+        // has loaded: keep the wish until the page asks for it (launchTab) or, if it is already running, switch now.
+        if (intent != null && "jobs".equals(intent.getStringExtra(Alerts.EXTRA_OPEN))) {
+            launchTab = "jobs";
+            callApp("if (window.RH && RH.go && window.Android && Android.launchTab() === 'jobs') RH.go('jobs')");
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        if (code == REQ_NOTIFY) callApp("window.RH && RH.onNotifyPermission && RH.onNotifyPermission(" + Alerts.allowed(this) + ")");
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        foreground = false;
         // keep job-site logins: write cookies to disk now
         if (Build.VERSION.SDK_INT >= 21) CookieManager.getInstance().flush();
     }
@@ -123,6 +146,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        foreground = true;
         if (appWeb != null) appWeb.evaluateJavascript("window.RH && RH.onResume && RH.onResume()", null);
     }
 
@@ -395,21 +419,7 @@ public class MainActivity extends Activity {
     class AppClient extends WebViewClient {
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
-            Uri u = req.getUrl();
-            if (APP_HOST.equals(u.getHost())) {
-                String path = u.getPath();
-                if (path == null || path.equals("/")) path = "/www/index.html";
-                path = path.substring(1);
-                try {
-                    String mime = mimeFor(path);
-                    InputStream in = getAssets().open(path);
-                    WebResourceResponse r = new WebResourceResponse(mime, "UTF-8", in);
-                    return r;
-                } catch (Exception e) {
-                    return new WebResourceResponse("text/plain", "UTF-8", new java.io.ByteArrayInputStream(new byte[0]));
-                }
-            }
-            return null;
+            return serveAsset(MainActivity.this, req.getUrl());
         }
 
         @Override
@@ -417,6 +427,19 @@ public class MainActivity extends Activity {
             if (url.startsWith("https://" + APP_HOST)) return false;
             openExternal(url);
             return true;
+        }
+    }
+
+    /** The app's own files, served from https://appassets.androidplatform.net/ (null for any other address). */
+    static WebResourceResponse serveAsset(Context c, Uri u) {
+        if (!APP_HOST.equals(u.getHost())) return null;
+        String path = u.getPath();
+        if (path == null || path.equals("/")) path = "/www/index.html";
+        path = path.substring(1);
+        try {
+            return new WebResourceResponse(mimeFor(path), "UTF-8", c.getAssets().open(path));
+        } catch (Exception e) {
+            return new WebResourceResponse("text/plain", "UTF-8", new java.io.ByteArrayInputStream(new byte[0]));
         }
     }
 
@@ -617,15 +640,19 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ storage
 
-    File kvFile(String key) {
-        File dir = new File(getFilesDir(), "kv");
+    // shared with the background site checker (SitesJob): static, one lock for the whole app process
+    static File kvFile(Context c, String key) {
+        File dir = new File(c.getFilesDir(), "kv");
         dir.mkdirs();
         return new File(dir, key.replaceAll("[^A-Za-z0-9._-]", "_") + ".txt");
     }
 
-    synchronized String kvRead(String key) {
+    String kvRead(String key) { return kvRead(this, key); }
+    void kvWrite(String key, String value) { kvWrite(this, key, value); }
+
+    static synchronized String kvRead(Context c, String key) {
         try {
-            File f = kvFile(key);
+            File f = kvFile(c, key);
             if (!f.exists()) return null;
             return new String(readAll(new FileInputStream(f)), "UTF-8");
         } catch (Exception e) {
@@ -633,9 +660,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    synchronized void kvWrite(String key, String value) {
+    static synchronized void kvWrite(Context c, String key, String value) {
         try {
-            File f = kvFile(key);
+            File f = kvFile(c, key);
             if (value == null) { f.delete(); return; }
             File tmp = new File(f.getPath() + ".tmp");
             OutputStream os = new FileOutputStream(tmp);
@@ -662,7 +689,7 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ HTTP
 
-    String doHttp(String reqJson) {
+    static String doHttp(String reqJson) {
         JSONObject res = new JSONObject();
         HttpURLConnection conn = null;
         try {
@@ -922,6 +949,50 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String platform() { return "android-" + Build.VERSION.SDK_INT; }
+
+        /** Send one email with the app password (new-job alerts). cfg: {host, port, user, pass, to, subject, body}. Result via __httpDone(id)/httpTake. */
+        @JavascriptInterface
+        public void sendMail(final String id, final String cfgJson) {
+            pool.execute(new Runnable() {
+                public void run() {
+                    httpResults.put(id, Alerts.sendMail(cfgJson));
+                    callApp("window.__httpDone && __httpDone(" + JSONObject.quote(id) + ")");
+                }
+            });
+        }
+
+        /** Check followed sites every 30 minutes in the background (also after a restart), or stop doing so. */
+        @JavascriptInterface
+        public void scheduleSiteChecks(boolean on) { Alerts.schedule(MainActivity.this, on); }
+
+        @JavascriptInterface
+        public boolean notificationsAllowed() { return Alerts.allowed(MainActivity.this); }
+
+        /** Android 13+: ask for permission to show notifications. Answer via RH.onNotifyPermission(granted). */
+        @JavascriptInterface
+        public void requestNotifications() {
+            ui.post(new Runnable() {
+                public void run() {
+                    if (Build.VERSION.SDK_INT >= 33 && !Alerts.allowed(MainActivity.this)) requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, REQ_NOTIFY);
+                    else callApp("window.RH && RH.onNotifyPermission && RH.onNotifyPermission(" + Alerts.allowed(MainActivity.this) + ")");
+                }
+            });
+        }
+
+        /** Phone makers (OnePlus, Xiaomi…) may stop background checks to save battery; this opens the setting. */
+        @JavascriptInterface
+        public void openBatterySettings() {
+            ui.post(new Runnable() {
+                public void run() {
+                    try { startActivity(new Intent("android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS")); }
+                    catch (Exception e) { try { startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS)); } catch (Exception ignored) { } }
+                }
+            });
+        }
+
+        /** "jobs" when the app was opened from a new-job notification (asked once). */
+        @JavascriptInterface
+        public String launchTab() { String t = launchTab; launchTab = null; return t; }
 
         /** Stable per phone (and per signing key); survives reinstalling the app, differs on every other phone. */
         @JavascriptInterface
