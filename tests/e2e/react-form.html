@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Apply — Senior React Developer at Acme Cloud</title>
+<style>body{font-family:sans-serif;padding:12px}label{display:block;margin-top:10px;font-weight:600}input,select,textarea{width:100%;padding:6px}</style>
+<script src="react.production.min.js"></script><script src="react-dom.production.min.js"></script></head>
+<body><h1>Acme Cloud — Senior React Developer</h1><div id="root"></div>
+<script>
+// A controlled React form, like Ashby / Lever / Greenhouse's new boards. State only changes through React's onChange.
+const e = React.createElement;
+function App() {
+  const [s, set] = React.useState({ first: '', last: '', email: '', phone: '', country: '', linkedin: '', why: '', auth: '', salary: '', start: '', hear: '', file: '' });
+  window.__state = s;
+  const on = (k) => (ev) => set(Object.assign({}, s, { [k]: ev.target.value }));
+  const field = (label, k, type) => e('div', { key: k }, e('label', { htmlFor: k }, label), e('input', { id: k, type: type || 'text', value: s[k], onChange: on(k) }));
+  return e('form', null,
+    field('First name *', 'first'), field('Last name *', 'last'), field('Email address *', 'email', 'email'), field('Phone number', 'phone', 'tel'),
+    e('div', null, e('label', { htmlFor: 'country' }, 'Country of residence'),
+      e('select', { id: 'country', value: s.country, onChange: on('country') }, ['Select...', 'United States', 'India', 'Germany'].map((o, i) => e('option', { key: o, value: i ? o : '' }, o)))),
+    field('LinkedIn profile URL', 'linkedin', 'url'),
+    e('div', null, e('label', { htmlFor: 'resume' }, 'Resume *'), e('input', { id: 'resume', type: 'file', accept: '.pdf,.doc,.docx', onChange: (ev) => set(Object.assign({}, s, { file: ev.target.files[0] ? ev.target.files[0].name + ':' + ev.target.files[0].size : '' })) })),
+    e('div', null, e('label', { htmlFor: 'why' }, 'Why are you interested in this role at Acme Cloud?'), e('textarea', { id: 'why', value: s.why, onChange: on('why') })),
+    e('div', { role: 'radiogroup', 'aria-labelledby': 'authq' }, e('div', { id: 'authq' }, 'Are you authorized to work for us as a remote contractor?'),
+      ['Yes', 'No'].map((o) => e('label', { key: o }, e('input', { type: 'radio', name: 'auth', value: o, checked: s.auth === o, onChange: on('auth') }), ' ' + o))),
+    field('What are your salary expectations (USD/year)?', 'salary'),
+    field('When can you start?', 'start'),
+    field('How did you hear about Acme Cloud?', 'hear'),
+    e('button', { type: 'button', id: 'submit', onClick: () => { window.__submitted = JSON.stringify(s); } }, 'Submit application'));
+}
+ReactDOM.createRoot(document.getElementById('root')).render(e(App));
+</script></body></html>

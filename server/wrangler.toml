@@ -1,0 +1,24 @@
+# Your RemoteHunt server on Cloudflare (free plan). Deploy from this folder with:  wrangler deploy
+# URL after deploying: https://remotehunt-personal.<your-subdomain>.workers.dev
+name = "remotehunt-personal"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+# Cloudflare Workers AI: free fallback model when your own AI keys are busy or not set
+[ai]
+binding = "AI"
+
+# Job database. `wrangler d1 create remotehunt` prints the id to put here.
+[[d1_databases]]
+binding = "DB"
+database_name = "remotehunt"
+database_id = "2b6d2ea1-f8f1-44d5-b627-fce29c080040"
+
+# The job crawler runs every minute (also nudged whenever the app opens)
+[triggers]
+crons = ["* * * * *"]
+
+# Secrets (never in this file), set with:  wrangler secret put NAME
+#   ACCESS_CODE  your personal unlock code, RH-XXXXX-XXXXX
+#   GEMINI_KEY   free key from https://aistudio.google.com/apikey (optional; GROQ_KEY etc. also work)

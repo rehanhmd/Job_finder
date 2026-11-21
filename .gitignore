@@ -1,0 +1,11 @@
+# build output (the APK contains your access code)
+build/
+tests/e2e/shots/
+.DS_Store
+node_modules/
+server/.wrangler/
+# secrets: never commit
+# - your signing key: keep it private and backed up
+*.keystore
+# - your access code (copy config.example.js to config.js)
+assets/www/js/config.js
